@@ -5,7 +5,6 @@ Group project for OS security class.
 # Idea
 
 Plug and play homelab services
-Web UI to provision new server (find, download, and verify images), new services
 
 # Services
 
@@ -22,3 +21,8 @@ Web UI to provision new server (find, download, and verify images), new services
 - Matrix?
 - HeadScale (port forwarded?)
 - Web server
+
+# Extensions
+- Terraform pve provisioning
+- Web UI
+- OS Image verifier
