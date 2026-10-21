@@ -1,0 +1,1 @@
+Copy .tfvars.example to terraform.tfvars 
