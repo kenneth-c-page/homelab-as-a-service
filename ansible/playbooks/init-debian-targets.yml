@@ -1,0 +1,15 @@
+- name: Init Debian Targets
+  hosts: nodes
+  become: yes
+  become_method: su
+  gather_facts: false
+  vars:
+    ansible_become_pass: "{{ root_password }}"
+  tasks:
+    - name: Install sudo and Python
+      raw: (command -v sudo) || (apt-get update && apt-get install -y sudo python3)
+      changed_when: false
+
+    - name: Give node user sudo rights
+      raw: /usr/sbin/usermod -aG sudo {{ ansible_user }}
+      changed_when: false
