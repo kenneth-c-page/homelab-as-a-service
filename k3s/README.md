@@ -1,0 +1,1 @@
+Let's make a directory for each person's k3s cluster config. Make a README for your cluster in your directory.
