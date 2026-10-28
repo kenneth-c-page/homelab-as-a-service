@@ -1,0 +1,10 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: searxng
+  namespace: 344-group-project
+  labels:
+    app: searxng-app
+spec:
+  
