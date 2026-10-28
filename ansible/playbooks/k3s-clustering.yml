@@ -1,0 +1,55 @@
+- name: Install k3s server
+  hosts: master_node
+  become: yes
+  tasks:
+  - name: Download k3s install script
+    get_url: 
+      url: https://get.k3s.io
+      dest: /tmp/k3s-install.sh
+      mode: "0755"
+  
+  - name: Run k3s install script
+    command: sh /tmp/k3s-install.sh
+    args:
+      creates: /usr/local/bin/k3s-uninstall.sh
+
+  - name: Copy kubeconfig to local machine
+    fetch:
+      src: /etc/rancher/k3s/k3s.yaml
+      dest: "{{ playbook_dir }}/../../k3s/k3s_config"
+      flat: yes
+
+  # This step copies the kubeconfig for kubectl to your machine and replaces the localhost address with the master node's
+  # This is because k3s creates the config and assumes you'll be running kubectl from the master node
+  - name: Point kubeconfig at the master node
+    replace:
+      path: "{{ playbook_dir }}/../../k3s/k3s_config"
+      regexp: 'https://127\.0\.0\.1:6443'
+      replace: 'https://{{ ansible_host }}:6443'
+    delegate_to: localhost
+    become: no
+
+- name: Join k3s workers
+  hosts: workers
+  become: yes
+  tasks:
+  - name: Get master node token
+    ansible.builtin.slurp:
+      src: "/var/lib/rancher/k3s/server/node-token"
+    register: master_token
+    delegate_to: master
+    run_once: true
+  
+  - name: Download k3s install script
+    get_url: 
+      url: https://get.k3s.io
+      dest: /tmp/k3s-install.sh
+      mode: "0755"
+
+  - name: Run k3s install script
+    command: sh /tmp/k3s-install.sh
+    environment:
+      K3S_URL: "https://{{ hostvars['master'].ansible_host }}:6643"
+      K3S_TOKEN: "{{ master_token.content | b64decode | trim }}"
+    args:
+      creates: /usr/local/bin/k3s-agent-uninstall.sh
