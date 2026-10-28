@@ -11,3 +11,5 @@ You'll need to install sshpass to get this setup to work. See more [here](https:
 If you're running a distro that doesn't come with sudo installed (which Ansible attempts to use by default) or python, run init-debian-targets.yml for debian-like targets, and modify as necessary per your distro.
 
 Some connections will fail arbitrarily, just try running commands again as needed
+
+After running the k3s playbook, to see what 
