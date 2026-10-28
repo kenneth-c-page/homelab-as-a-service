@@ -48,8 +48,21 @@
 
   - name: Run k3s install script
     command: sh /tmp/k3s-install.sh
-    environment:
-      K3S_URL: "https://{{ hostvars['master'].ansible_host }}:6643"
-      K3S_TOKEN: "{{ master_token.content | b64decode | trim }}"
     args:
       creates: /usr/local/bin/k3s-agent-uninstall.sh
+    environment:
+      K3S_URL: "https://{{ hostvars['master'].ansible_host }}:6443"
+      K3S_TOKEN: "{{ master_token.content | b64decode | trim }}"
+
+- name: Get nodes on master
+  hosts: master
+  become: yes
+  tasks:
+  - name: Get nodes
+    command: kubectl get nodes
+    register: k3s_nodes
+    changed_when: false
+
+  - name: List nodes on runner
+    debug:
+      msg: "{{ k3s_nodes.stdout_lines }}"

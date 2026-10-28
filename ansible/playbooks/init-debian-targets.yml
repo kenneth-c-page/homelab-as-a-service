@@ -7,7 +7,7 @@
     ansible_become_pass: "{{ root_password }}"
   tasks:
     - name: Install sudo and Python
-      raw: (command -v sudo) || (apt-get update && apt-get install -y sudo python3)
+      raw: apt-get update && apt-get install -y sudo python3 curl
       changed_when: false
 
     - name: Give node user sudo rights
