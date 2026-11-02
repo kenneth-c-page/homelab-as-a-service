@@ -7,9 +7,9 @@ Group project for OS security class.
 Plug and play homelab services
 
 # Services
-
-- Plex/JellyFin server
-- Music streaming server: navidrome
+ 
+- Plex/JellyFin server    - Jesse
+- Music streaming server: navidrome - Jesse
 - SearXNG: Kenneth
 - PiHole/AdGuard/Unbound
 - Immich
