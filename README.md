@@ -8,14 +8,14 @@ Plug and play homelab services
 
 # Services
 
-- Plex/JellyFin server
-- Music streaming server: navidrome
+- Plex/JellyFin server   - Jesse
+- Music streaming server: navidrome - Jesse
 - SearXNG
 - PiHole/AdGuard/Unbound
 - Immich
 - OpenOffice/collaboration
 - NextCloud file storage
-- VaultWarden
+- VaultWarden  -  Kenneth
 - 2FA (Authentik)
 - Matrix?
 - HeadScale (port forwarded?)
