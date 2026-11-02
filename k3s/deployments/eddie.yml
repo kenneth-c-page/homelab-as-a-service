@@ -1,0 +1,9 @@
+---
+apiVersion: 
+kind: 
+metadata:
+  name: 
+  namespace: 344-group-project # USE THIS NAMESPACE FOR ALL APPS, SERVICES, ETC
+  labels:
+    app: 
+spec:
