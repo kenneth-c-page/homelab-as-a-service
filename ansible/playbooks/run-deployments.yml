@@ -1,0 +1,17 @@
+- name: Run deployments
+  hosts: master_node
+  become: yes
+  tasks:
+  - name: Copy kubeconfig to local machine
+    fetch:
+      src: /etc/rancher/k3s/k3s.yaml
+      dest: "{{ playbook_dir }}/../../k3s/k3s_config"
+      flat: yes
+  
+  - name: Point kubeconfig at the master node
+    replace:
+      path: "{{ playbook_dir }}/../../k3s/k3s_config"
+      regexp: 'https://127\.0\.0\.1:6443'
+      replace: 'https://{{ ansible_host }}:6443'
+    delegate_to: localhost
+    become: no
