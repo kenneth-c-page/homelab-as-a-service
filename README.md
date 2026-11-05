@@ -24,8 +24,8 @@ Plug and play homelab services
 | Web server | Lucas | |
 | Mail Server (Pop3S or SMTP) / ProtonMail bridge | Craig | |
 | Minecraft Server (rust) | Craig | |
-| Metrics Dashboard – Prometheus, ELK stack, loki? | | |
-| Log Dashboard – Splunk (SIEM), Grafana, Wazuh | | |
+| Metrics Dashboard – Prometheus, ELK stack, loki? | Josh | | 
+| Log Dashboard – Splunk (SIEM), Grafana, Wazuh | Josh | |
 | Could add a Risk Management dashboard? | | |
 
 # Extensions
