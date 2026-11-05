@@ -13,7 +13,7 @@ Plug and play homelab services
 - SearXNG: Kenneth
 - PiHole/AdGuard/Unbound - Lucas (pihole with unbound for recursive dns)
 - Immich
-- OpenOffice/collaboration
+- OpenOffice/collaboration - Eddie
 - NextCloud file storage
 - VaultWarden: Kenneth
 - 2FA (Authentik) - Lucas
