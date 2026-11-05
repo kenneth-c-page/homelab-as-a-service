@@ -20,8 +20,8 @@ Plug and play homelab services
 - Matrix?
 - HeadScale (port forwarded?)
 - Web server - Lucas
-- Mail Server (Pop3S or SMTP) / ProtonMail bridge 
-- Minecraft Server
+- Mail Server (Pop3S or SMTP) / ProtonMail bridge - Craig
+- Minecraft Server (rust) - Craig
 - Matrix server 
 - Metrics Dashboard – Prometheus, ELK stack, loki? 
 - Log Dashboard - Splunk (SIEM), Grafana, Wazuh 
