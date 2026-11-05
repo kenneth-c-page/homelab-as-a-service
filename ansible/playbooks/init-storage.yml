@@ -1,0 +1,257 @@
+# Moves three ZFS pools from the Proxmox node into the storage VM and has the VM
+# export them over NFS to the k3s cluster.
+#
+#   1. Proxmox node: export each pool and pass its physical disks through to the storage VM
+#   2. Storage VM:   install ZFS, import the pools, create datasets, export them over NFS
+#   3. k3s nodes:    install the NFS client
+#   4. Master node:  check the exports are visible
+#
+# Run from the ansible/ directory:
+#   ansible-playbook playbooks/init-storage.yml --vault-id nodes@prompt --vault-id proxmox@prompt
+#
+# The Proxmox root password lives in its own vault (inventory/group_vars/proxmox/vault.yml),
+# so you're prompted for the nodes vault password and then the proxmox vault password.
+#
+# Before running:
+#   - Add the Proxmox node to a [proxmox] group in inventory/hosts.ini (ansible_user=root)
+#   - Set storage_vmid in playbooks/vars/storage.yml
+#   - Stop anything on the Proxmox node that uses these pools (VM disks, containers, backups)
+#
+# A pool must never be imported on the node and in the VM at the same time, or it will be
+# corrupted. This playbook disables any Proxmox storage entry that points at these pools.
+
+- name: Hand ZFS pools from the Proxmox node to the storage VM
+  hosts: pve
+  vars_files:
+    - vars/storage.yml
+  tasks:
+    - name: Check storage_vmid is set
+      assert:
+        that: storage_vmid | string is match('^[0-9]+$')
+        fail_msg: Set storage_vmid in playbooks/vars/storage.yml
+
+    - name: Check the storage VM exists
+      command: qm status {{ storage_vmid }}
+      changed_when: false
+
+    - name: Check which pools are still imported on the node
+      command: zpool list -H -o name {{ item.pool }}
+      loop: "{{ nfs_zfs_exports }}"
+      loop_control:
+        label: "{{ item.pool }}"
+      register: host_pools
+      changed_when: false
+      failed_when: false
+
+    # Whole-disk /dev/disk/by-id paths for every disk in each pool still on the node.
+    # Pools already moved to the VM are skipped.
+    - name: Find the disks behind each pool
+      shell: |
+        set -o pipefail
+        for dev in $(zpool list -v -H -P -L {{ item.item.pool }} | awk '$1 ~ /^\/dev\// {print $1}'); do
+          disk=$(lsblk -no pkname "$dev" | head -1)
+          [ -z "$disk" ] && disk=$(basename "$dev")
+          id=$(for link in /dev/disk/by-id/*; do
+                 [ "$(readlink -f "$link")" = "/dev/$disk" ] && echo "$link"
+               done | grep -v -- '-part' | grep -v '/wwn-' | head -1)
+          [ -z "$id" ] && { echo "no /dev/disk/by-id link for /dev/$disk" >&2; exit 1; }
+          echo "$id"
+        done | sort -u
+      args:
+        executable: /bin/bash
+      loop: "{{ host_pools.results | selectattr('rc', 'equalto', 0) | list }}"
+      loop_control:
+        label: "{{ item.item.pool }}"
+      register: pool_disks
+      changed_when: false
+
+    - name: Show disks that will be passed through
+      debug:
+        msg: "{{ item.item.item.pool }}: {{ item.stdout_lines }}"
+      loop: "{{ pool_disks.results }}"
+      loop_control:
+        label: "{{ item.item.item.pool }}"
+
+    # Proxmox would otherwise re-import the pool on the node while the VM owns it
+    - name: Disable Proxmox storage entries that use these pools
+      shell: |
+        set -o pipefail
+        ids=$(awk '/^zfspool:/ {id=$2} $1=="pool" && ($2=="{{ item.pool }}" || index($2, "{{ item.pool }}/")==1) {print id}' /etc/pve/storage.cfg)
+        for id in $ids; do
+          if ! pvesm config "$id" 2>/dev/null | grep -q '^disable'; then
+            pvesm set "$id" --disable 1 && echo "disabled $id"
+          fi
+        done
+      args:
+        executable: /bin/bash
+      loop: "{{ nfs_zfs_exports }}"
+      loop_control:
+        label: "{{ item.pool }}"
+      register: pve_storage
+      changed_when: "'disabled' in pve_storage.stdout"
+
+    - name: Export pools from the node
+      command: zpool export {{ item.item.pool }}
+      loop: "{{ host_pools.results | selectattr('rc', 'equalto', 0) | list }}"
+      loop_control:
+        label: "{{ item.item.pool }}"
+
+    - name: Pass disks through to the storage VM
+      shell: |
+        cfg=$(qm config {{ storage_vmid }})
+        if echo "$cfg" | grep -qF "{{ item }}"; then
+          exit 0
+        fi
+        for i in $(seq 1 30); do
+          if ! echo "$cfg" | grep -q "^scsi$i:"; then
+            qm set {{ storage_vmid }} --scsi$i "{{ item }},backup=0" && echo "attached scsi$i"
+            exit $?
+          fi
+        done
+        echo "no free scsi slot on VM {{ storage_vmid }}" >&2
+        exit 1
+      args:
+        executable: /bin/bash
+      loop: "{{ pool_disks.results | map(attribute='stdout_lines') | flatten | unique }}"
+      register: passthrough
+      changed_when: "'attached' in passthrough.stdout"
+
+- name: Import ZFS pools and serve them over NFS from the storage VM
+  hosts: storage
+  become: yes
+  vars_files:
+    - vars/storage.yml
+  vars:
+    # Only the k3s nodes from the inventory may mount the exports
+    nfs_allowed_clients: >-
+      {{ (groups['master_node'] + groups['workers'])
+         | map('extract', hostvars, 'ansible_host') | list }}
+  tasks:
+    # zfs-dkms and zfsutils-linux are in Debian's contrib component
+    - name: Enable Debian contrib repository
+      deb822_repository:
+        name: debian-contrib
+        types: deb
+        uris: http://deb.debian.org/debian
+        suites: "{{ ansible_distribution_release }}"
+        components: contrib
+        state: present
+      when: ansible_distribution == 'Debian'
+
+    - name: Install ZFS and NFS server
+      apt:
+        name:
+          - linux-headers-{{ ansible_kernel }}
+          - zfs-dkms
+          - zfsutils-linux
+          - nfs-kernel-server
+        state: present
+        update_cache: yes
+
+    - name: Load ZFS kernel module
+      community.general.modprobe:
+        name: zfs
+        state: present
+
+    - name: Enable ZFS import and mount at boot
+      service:
+        name: "{{ item }}"
+        enabled: yes
+      loop:
+        - zfs-import-cache
+        - zfs-mount
+        - zfs.target
+
+    - name: Check which pools are already imported
+      command: zpool list -H -o name {{ item.pool }}
+      loop: "{{ nfs_zfs_exports }}"
+      loop_control:
+        label: "{{ item.pool }}"
+      register: vm_pools
+      changed_when: false
+      failed_when: false
+
+    - name: Import pools
+      command: zpool import -d /dev/disk/by-id {{ item.item.pool }}
+      loop: "{{ vm_pools.results | rejectattr('rc', 'equalto', 0) | list }}"
+      loop_control:
+        label: "{{ item.item.pool }}"
+
+    - name: Create ZFS datasets for NFS
+      community.general.zfs:
+        name: "{{ item.dataset }}"
+        state: present
+        extra_zfs_properties:
+          mountpoint: "{{ item.mountpoint }}"
+          # Exports are managed in /etc/exports.d instead of through ZFS
+          sharenfs: "off"
+      loop: "{{ nfs_zfs_exports }}"
+      loop_control:
+        label: "{{ item.dataset }}"
+
+    - name: Set permissions on export directories
+      file:
+        path: "{{ item.mountpoint }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0777"
+      loop: "{{ nfs_zfs_exports }}"
+      loop_control:
+        label: "{{ item.mountpoint }}"
+
+    # Debian's nfs-kernel-server doesn't create this, but exportfs reads it when present
+    - name: Create /etc/exports.d
+      file:
+        path: /etc/exports.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Write NFS exports for the k3s cluster
+      copy:
+        dest: /etc/exports.d/k3s-zfs.exports
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by Ansible (init-storage.yml)
+          {% for export in nfs_zfs_exports %}
+          {{ export.mountpoint }} {% for client in nfs_allowed_clients %}{{ client }}({{ nfs_export_options }}) {% endfor %}
+
+          {% endfor %}
+      notify: Reload NFS exports
+
+    - name: Enable and start NFS server
+      service:
+        name: nfs-server
+        state: started
+        enabled: yes
+
+  handlers:
+    - name: Reload NFS exports
+      command: exportfs -ra
+
+- name: Prepare k3s nodes to mount NFS
+  hosts: master_node:workers
+  become: yes
+  tasks:
+    - name: Install NFS client
+      apt:
+        name: nfs-common
+        state: present
+        update_cache: yes
+
+- name: Verify exports are visible from the cluster
+  hosts: master_node
+  become: yes
+  tasks:
+    - name: List exports on the storage VM
+      command: showmount -e {{ hostvars[groups['storage'][0]].ansible_host }}
+      register: nfs_exports
+      changed_when: false
+
+    - name: Show exports
+      debug:
+        msg: "{{ nfs_exports.stdout_lines }}"

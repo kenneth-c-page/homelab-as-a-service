@@ -1,0 +1,21 @@
+# Shared settings for init-storage.yml
+
+# Proxmox VM ID of the storage VM (shown in the Proxmox UI / `qm list` on the node)
+storage_vmid: 105
+
+# ZFS pools on the Proxmox node (from `zpool list`) that get handed to the storage VM.
+# Format of dataset: <pool>/<child dataset to create and export>
+nfs_zfs_exports:
+  - pool: asus_nfs_128gb
+    dataset: asus_nfs_128gb/k3s-nfs
+    mountpoint: /srv/nfs/asus_nfs_128gb
+  - pool: asus_nfs_2tb
+    dataset: asus_nfs_2tb/k3s-nfs
+    mountpoint: /srv/nfs/asus_nfs_2tb
+  - pool: asus_nfs_320gb
+    dataset: asus_nfs_320gb/k3s-nfs
+    mountpoint: /srv/nfs/asus_nfs_320gb
+
+# no_root_squash lets pods (and provisioners like nfs-subdir-external-provisioner)
+# chown/chmod inside volumes. Access is limited to the k3s node IPs.
+nfs_export_options: rw,sync,no_subtree_check,no_root_squash

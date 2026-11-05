@@ -6,6 +6,18 @@ The password protecting it is the same as the nodes' user passwords for this pro
 
 To use the password, run ansible-playbook playbooks/<playbook>.yml --ask-vault-pass. Run this from the ansible/ directory so it pulls ansible.cfg. If you depend on a hosts file at a position other than where hosts.ini is, specify that path when you run.
 
+The Proxmox node's root password is kept in a separate vault, since it differs from the nodes' password. Create it once with
+
+ansible-vault create --vault-id proxmox@prompt inventory/group_vars/proxmox/vault.yml
+
+and put this line in it:
+
+vault_proxmox_root_password: <proxmox root password>
+
+Edit it later with ansible-vault edit --vault-id proxmox@prompt inventory/group_vars/proxmox/vault.yml. Playbooks that touch the Proxmox node (init-storage.yml) need both vault passwords:
+
+ansible-playbook playbooks/init-storage.yml --vault-id nodes@prompt --vault-id proxmox@prompt
+
 You'll need to install sshpass to get this setup to work. See more [here](https://oneuptime.com/blog/post/2026-02-21-how-to-use-ansible-with-password-based-ssh-authentication/view)
 
 If you're running a distro that doesn't come with sudo installed (which Ansible attempts to use by default) or python, run init-debian-targets.yml for debian-like targets, and modify as necessary per your distro.
