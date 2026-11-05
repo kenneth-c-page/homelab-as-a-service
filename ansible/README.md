@@ -12,4 +12,4 @@ If you're running a distro that doesn't come with sudo installed (which Ansible 
 
 Some connections will fail arbitrarily, just try running commands again as needed
 
-After running the k3s playbook, to see what 
+After running the k3s/run-deployments playbook, to see what nodes are running, run kubectl --kubeconfig /path/to/k3s_config get nodes
