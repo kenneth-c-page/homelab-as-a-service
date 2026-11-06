@@ -1,6 +1,9 @@
 services:
   astrowind:
     build: .
+    # The k3s manifest expects this image name. Build with:
+    #   docker compose -f services/website/compose.yml build
+    image: astrowind:latest
     container_name: astrowind
     ports:
       - 9876:8080

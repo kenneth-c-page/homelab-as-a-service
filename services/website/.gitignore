@@ -26,3 +26,6 @@ pnpm-lock.yaml
 pnpm-workspace.yaml
 
 .astro
+
+# k3s image exports
+*.tar

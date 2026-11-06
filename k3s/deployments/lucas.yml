@@ -1,9 +1,603 @@
+# homelab-as-a-service - Lucas's services
+#
+# Apply the shared namespace first, then this manifest:
+#   kubectl apply -f k3s/namespace.yml
+#   kubectl apply -f k3s/deployments/lucas.yml
+#
+# Before applying:
+#   - Replace the placeholder values in the "homelab-secrets" Secret.
+#     See k3s/lucas-secrets.md.
+#   - Build and import the website image, or push it to a registry.
+#     See services/website/k3s-image.md.
+#
+# Optional: switch the HTTP endpoints from LoadBalancer ports to Traefik
+# Ingress hostnames. See k3s/lucas-ingress.md.
 ---
-apiVersion: 
-kind: 
+apiVersion: v1
+kind: Secret
 metadata:
-  name: 
-  namespace: 344-group-project # USE THIS NAMESPACE FOR ALL APPS, SERVICES, ETC
+  name: homelab-secrets
+  namespace: 344-group-project
   labels:
-    app: 
+    app.kubernetes.io/part-of: homelab-as-a-service
+type: Opaque
+stringData:
+  # Replace these before using this manifest for anything real.
+  # Generate values with the commands in k3s/lucas-secrets.md.
+  PG_PASS: "CHANGE_ME_postgres_password"
+  AUTHENTIK_SECRET_KEY: "CHANGE_ME_authentik_secret_key_at_least_50_characters_long_0000000000"
+  PIHOLE_PASSWORD: "CHANGE_ME_pihole_admin_password"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: authentik-postgres-data
+  namespace: 344-group-project
+  labels:
+    app: authentik-postgresql
 spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: authentik-data
+  namespace: 344-group-project
+  labels:
+    app: authentik
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pihole-etc
+  namespace: 344-group-project
+  labels:
+    app: pihole
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: authentik-postgresql
+  namespace: 344-group-project
+  labels:
+    app: authentik-postgresql
+spec:
+  replicas: 1
+  # The default k3s local-path storage class is ReadWriteOnce. Recreate
+  # avoids a rolling update getting stuck waiting for the old pod to release
+  # the volume.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: authentik-postgresql
+  template:
+    metadata:
+      labels:
+        app: authentik-postgresql
+    spec:
+      # The postgres:16-alpine image runs as UID/GID 70. fsGroup lets it
+      # write to the k3s local-path volume.
+      securityContext:
+        fsGroup: 70
+      containers:
+        - name: postgresql
+          image: docker.io/library/postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POSTGRES_DB
+              value: authentik
+            - name: POSTGRES_USER
+              value: authentik
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: homelab-secrets
+                  key: PG_PASS
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -d
+                - authentik
+                - -U
+                - authentik
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -d
+                - authentik
+                - -U
+                - authentik
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 6
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: authentik-postgres-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: authentik-postgresql
+  namespace: 344-group-project
+  labels:
+    app: authentik-postgresql
+spec:
+  type: ClusterIP
+  selector:
+    app: authentik-postgresql
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: authentik
+  namespace: 344-group-project
+  labels:
+    app: authentik
+spec:
+  # Keep this at 1 with k3s's local-path storage. For HA, split the server and
+  # worker into separate Deployments and use an RWX storage class
+  # (for example Longhorn or NFS).
+  replicas: 1
+  # The server and worker share one ReadWriteOnce volume, so they run in the
+  # same pod. This also keeps them on the same node with local-path storage.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: authentik
+  template:
+    metadata:
+      labels:
+        app: authentik
+    spec:
+      # The authentik image runs as UID/GID 1000. fsGroup lets both containers
+      # write to the shared local-path volume.
+      securityContext:
+        fsGroup: 1000
+      initContainers:
+        - name: wait-for-postgres
+          image: docker.io/library/postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - >-
+              until pg_isready -h authentik-postgresql -p 5432 -U authentik -d authentik;
+              do echo "waiting for postgres"; sleep 2; done
+      containers:
+        - name: server
+          image: ghcr.io/goauthentik/server:2026.8.5
+          imagePullPolicy: IfNotPresent
+          # The image's entrypoint already knows how to start authentik, so
+          # "server" is passed as an argument, matching the Compose command.
+          args:
+            - server
+          env:
+            - name: AUTHENTIK_POSTGRESQL__HOST
+              value: authentik-postgresql
+            - name: AUTHENTIK_POSTGRESQL__NAME
+              value: authentik
+            - name: AUTHENTIK_POSTGRESQL__USER
+              value: authentik
+            - name: AUTHENTIK_POSTGRESQL__PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: homelab-secrets
+                  key: PG_PASS
+            - name: AUTHENTIK_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: homelab-secrets
+                  key: AUTHENTIK_SECRET_KEY
+            # Set to "false" if you do not want Authentik to send error
+            # reports to sentry.io.
+            - name: AUTHENTIK_ERROR_REPORTING__ENABLED
+              value: "true"
+          ports:
+            - name: http
+              containerPort: 9000
+              protocol: TCP
+            - name: https
+              containerPort: 9443
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /-/health/live/
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /-/health/live/
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /-/health/ready/
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: authentik-data
+              mountPath: /data
+            - name: templates
+              mountPath: /templates
+            - name: shm
+              mountPath: /dev/shm
+        # The Compose file runs the worker as root and mounts the Docker
+        # socket so it can manage Docker Outposts. In Kubernetes, Outposts are
+        # deployed separately, so the socket mount and root user are omitted.
+        - name: worker
+          image: ghcr.io/goauthentik/server:2026.8.5
+          imagePullPolicy: IfNotPresent
+          args:
+            - worker
+          env:
+            - name: AUTHENTIK_POSTGRESQL__HOST
+              value: authentik-postgresql
+            - name: AUTHENTIK_POSTGRESQL__NAME
+              value: authentik
+            - name: AUTHENTIK_POSTGRESQL__USER
+              value: authentik
+            - name: AUTHENTIK_POSTGRESQL__PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: homelab-secrets
+                  key: PG_PASS
+            - name: AUTHENTIK_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: homelab-secrets
+                  key: AUTHENTIK_SECRET_KEY
+            - name: AUTHENTIK_ERROR_REPORTING__ENABLED
+              value: "true"
+          startupProbe:
+            exec:
+              command:
+                - ak
+                - healthcheck
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            exec:
+              command:
+                - ak
+                - healthcheck
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - ak
+                - healthcheck
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: authentik-data
+              mountPath: /data
+            - name: templates
+              mountPath: /templates
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: authentik-data
+          persistentVolumeClaim:
+            claimName: authentik-data
+        # Empty by default. Replace with a ConfigMap or PVC if you add
+        # custom Authentik templates.
+        - name: templates
+          emptyDir: {}
+        # Equivalent of Compose's shm_size: 512mb.
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: authentik-server
+  namespace: 344-group-project
+  labels:
+    app: authentik
+spec:
+  type: LoadBalancer
+  selector:
+    app: authentik
+  ports:
+    - name: http
+      port: 9000
+      targetPort: http
+      protocol: TCP
+    - name: https
+      port: 9443
+      targetPort: https
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unbound
+  namespace: 344-group-project
+  labels:
+    app: unbound
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: unbound
+  template:
+    metadata:
+      labels:
+        app: unbound
+    spec:
+      containers:
+        - name: unbound
+          image: docker.io/klutchell/unbound:1.24.2
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: dns-udp
+              containerPort: 53
+              protocol: UDP
+            - name: dns-tcp
+              containerPort: 53
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: dns-tcp
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: dns-tcp
+            initialDelaySeconds: 30
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: unbound
+  namespace: 344-group-project
+  labels:
+    app: unbound
+spec:
+  # Pi-hole uses this Service name as its DNS upstream, so keep it "unbound"
+  # unless you also change FTLCONF_dns_upstreams.
+  type: ClusterIP
+  selector:
+    app: unbound
+  ports:
+    - name: dns-udp
+      port: 53
+      targetPort: dns-udp
+      protocol: UDP
+    - name: dns-tcp
+      port: 53
+      targetPort: dns-tcp
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pihole
+  namespace: 344-group-project
+  labels:
+    app: pihole
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: pihole
+  template:
+    metadata:
+      labels:
+        app: pihole
+    spec:
+      initContainers:
+        - name: wait-for-unbound
+          image: docker.io/library/busybox:1.37
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - >-
+              until nc -z -w 2 unbound 53; do echo "waiting for unbound"; sleep 2; done
+      containers:
+        - name: pihole
+          image: docker.io/pihole/pihole:2026.10.1
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: TZ
+              value: America/Denver
+            - name: FTLCONF_webserver_api_password
+              valueFrom:
+                secretKeyRef:
+                  name: homelab-secrets
+                  key: PIHOLE_PASSWORD
+            - name: FTLCONF_dns_listeningMode
+              value: ALL
+            # Use the fully-qualified Service name so this works regardless
+            # of the pod's DNS search path.
+            - name: FTLCONF_dns_upstreams
+              value: unbound.344-group-project.svc.cluster.local
+          ports:
+            - name: dns-udp
+              containerPort: 53
+              protocol: UDP
+            - name: dns-tcp
+              containerPort: 53
+              protocol: TCP
+            - name: http
+              containerPort: 80
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 3
+          volumeMounts:
+            - name: pihole-etc
+              mountPath: /etc/pihole
+      volumes:
+        - name: pihole-etc
+          persistentVolumeClaim:
+            claimName: pihole-etc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pihole-web
+  namespace: 344-group-project
+  labels:
+    app: pihole
+spec:
+  type: LoadBalancer
+  selector:
+    app: pihole
+  ports:
+    - name: http
+      port: 6789
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pihole-dns
+  namespace: 344-group-project
+  labels:
+    app: pihole
+spec:
+  # If the nodes already run a resolver on port 53 (commonly systemd-resolved
+  # on 127.0.0.53:53), k3s cannot bind this LoadBalancer port. See
+  # k3s/lucas-ingress.md for the NodePort alternative.
+  type: LoadBalancer
+  selector:
+    app: pihole
+  ports:
+    - name: dns-udp
+      port: 53
+      targetPort: dns-udp
+      protocol: UDP
+    - name: dns-tcp
+      port: 53
+      targetPort: dns-tcp
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: website
+  namespace: 344-group-project
+  labels:
+    app: website
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: website
+  template:
+    metadata:
+      labels:
+        app: website
+    spec:
+      containers:
+        - name: website
+          # Built from services/website/Dockerfile. See
+          # services/website/k3s-image.md for importing it into k3s.
+          image: astrowind:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: website
+  namespace: 344-group-project
+  labels:
+    app: website
+spec:
+  type: LoadBalancer
+  selector:
+    app: website
+  ports:
+    - name: http
+      port: 9876
+      targetPort: http
+      protocol: TCP
