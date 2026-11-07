@@ -1,17 +1,67 @@
 - name: Run deployments
   hosts: master_node
   become: yes
+  vars:
+    k3s_dir: "{{ playbook_dir | dirname | dirname }}/k3s"
   tasks:
   - name: Copy kubeconfig to local machine
     fetch:
       src: /etc/rancher/k3s/k3s.yaml
-      dest: "{{ playbook_dir }}/../../k3s/k3s_config"
+      dest: "{{ k3s_dir }}/k3s_config"
       flat: yes
-  
+
   - name: Point kubeconfig at the master node
     replace:
-      path: "{{ playbook_dir }}/../../k3s/k3s_config"
+      path: "{{ k3s_dir }}/k3s_config"
       regexp: 'https://127\.0\.0\.1:6443'
       replace: 'https://{{ ansible_host }}:6443'
     delegate_to: localhost
     become: no
+
+  - name: Install cert-manager components
+    command: kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.21.3/cert-manager.yaml
+
+  - name: Wait for the ClusterIssuer CRD
+    command: kubectl wait --for=condition=Established --timeout=120s crd/clusterissuers.cert-manager.io
+
+  - name: Wait for cert-manager deployments
+    command: kubectl wait --for=condition=Available --timeout=180s deployment --all --namespace=cert-manager
+
+  - name: Apply manifests from the local machine
+    delegate_to: localhost
+    become: no
+    environment:
+      KUBECONFIG: "{{ k3s_dir }}/k3s_config"
+    block:
+
+    - name: Apply namespaces
+      command: kubectl apply -f "{{ k3s_dir }}/namespace.yml"
+
+    - name: Create self-signing issuer
+      command: kubectl apply -f "{{ k3s_dir }}/cert-issuer.yml"
+
+    # Values are fed through stdin so the admin token hash never appears in
+    # the process list, and no_log keeps it out of Ansible's output.
+    - name: Create Vaultwarden secret from the Ansible vault
+      shell: |
+        set -o pipefail
+        kubectl -n 344-group-project create secret generic vw-secret \
+          --from-env-file=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -
+      args:
+        executable: /bin/bash
+        stdin: |
+          ADMIN_TOKEN={{ vault_vaultwarden_admin_token }}
+          SIGNUPS_ALLOWED=true
+          DOMAIN=https://vaultwarden.home.arpa
+      register: vw_secret
+      changed_when: "'unchanged' not in vw_secret.stdout"
+      no_log: true
+
+    - name: Apply kenneth.yml
+      command: kubectl apply -f "{{ k3s_dir }}/deployments/kenneth.yml"
+
+    # Vaultwarden only reads env vars at startup, so restart it when an
+    # existing secret's values change (a fresh "created" secret needs no restart).
+    - name: Restart Vaultwarden to pick up secret changes
+      command: kubectl -n 344-group-project rollout restart deployment vw-app
+      when: "'configured' in vw_secret.stdout"
