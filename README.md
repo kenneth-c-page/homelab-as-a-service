@@ -11,10 +11,10 @@ Plug and play homelab services
 | Service | Team Member | Status |
 | --- | --- | --- |
 | Plex/JellyFin server | Jesse | |
-| Music streaming server: navidrome | Jesse | |
+| Music streaming server: navidrome |  | |
 | SearXNG | Kenneth | |
 | PiHole/AdGuard/Unbound (pihole with unbound for recursive dns) | Lucas | |
-| Immich | | |
+| Immich | Jesse | |
 | OpenOffice/collaboration | Eddie | |
 | NextCloud file storage | | |
 | VaultWarden | Kenneth | |
