@@ -1,9 +1,208 @@
----
-apiVersion: 
-kind: 
+--- # Secret resource for database credentials
+apiVersion: v1
+kind: Secret
 metadata:
-  name: 
-  namespace: 344-group-project # USE THIS NAMESPACE FOR ALL APPS, SERVICES, ETC
-  labels:
-    app: 
+  name: immich-secret
+  namespace: 344-group-project
+type: Opaque
+stringData:
+  DB_PASSWORD: "kubernetes"
+--- # PV for Immich uploaded media assets
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: immich-data-pv
 spec:
+  capacity:
+    storage: 50Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  mountOptions:
+    - nfsvers=4.1
+  nfs:
+    server: 192.168.1.158
+    path: /srv/nfs/immich-data
+--- # PVC for Immich uploaded media assets
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: immich-data-pvc
+  namespace: 344-group-project
+spec:
+  accessModes:
+    - ReadWriteMany
+  volumeMode: Filesystem
+  volumeName: immich-data-pv
+  resources:
+    requests:
+      storage: 50Gi
+  storageClassName: ""
+--- # PV for PostgreSQL database data
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: immich-pg-pv
+spec:
+  capacity:
+    storage: 10Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  mountOptions:
+    - nfsvers=4.1
+  nfs:
+    server: 192.168.1.158
+    path: /srv/nfs/immich-postgres
+--- # PVC for PostgreSQL database data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: immich-pg-pvc
+  namespace: 344-group-project
+spec:
+  accessModes:
+    - ReadWriteMany
+  volumeMode: Filesystem
+  volumeName: immich-pg-pv
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: ""
+--- # Unified Deployment containing both Immich Server and PostgreSQL in the same Pod
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: immich-app
+  namespace: 344-group-project
+  labels:
+    app: immich-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: immich-app
+  template:
+    metadata:
+      labels:
+        app: immich-app
+    spec:
+      containers:
+        - name: server
+          image: ghcr.io/immich-app/immich-server:v1.119.0
+          ports:
+            - containerPort: 2283
+              name: http
+          env:
+            - name: DB_HOSTNAME
+              value: "localhost"
+            - name: DB_USERNAME
+              value: "postgres"
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: immich-secret
+                  key: DB_PASSWORD
+            - name: DB_DATABASE_NAME
+              value: "immich"
+          volumeMounts:
+            - name: nfs-data
+              mountPath: /usr/src/app/upload
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /api/server-info/ping
+              port: 2283
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /api/server-info/ping
+              port: 2283
+            initialDelaySeconds: 15
+            periodSeconds: 5
+        - name: database
+          image: tensorchord/pgvector:pg16
+          ports:
+            - containerPort: 5432
+              name: postgres
+          env:
+            - name: POSTGRES_USER
+              value: "postgres"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: immich-secret
+                  key: DB_PASSWORD
+            - name: POSTGRES_DB
+              value: "immich"
+          volumeMounts:
+            - name: nfs-pg-data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+      volumes:
+        - name: nfs-data
+          persistentVolumeClaim:
+            claimName: immich-data-pvc
+        - name: nfs-pg-data
+          persistentVolumeClaim:
+            claimName: immich-pg-pvc
+--- # Internal ClusterIP Service for Immich Server
+apiVersion: v1
+kind: Service
+metadata:
+  name: immich-traefik-ingress
+  namespace: 344-group-project
+spec:
+  selector:
+    app: immich-app
+  ports:
+    - port: 2283
+      targetPort: 2283
+      protocol: TCP
+      name: http
+  type: ClusterIP
+--- # TLS Ingress routing via Traefik
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: immich-tls-ingress
+  namespace: 344-group-project
+  annotations:
+    cert-manager.io/cluster-issuer: cm-ca
+spec:
+  tls:
+    - hosts:
+        - immich.home.arpa
+      secretName: immich-tls-secret
+  rules:
+    - host: immich.home.arpa
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: immich-traefik-ingress
+                port:
+                  number: 2283
+[cite: 1]
+
+### Create both NFS export directories on your storage server (`192.168.1.158`): `/srv/nfs/immich-data` and `/srv/nfs/immich-postgres`.
+### apply deployment with:   kubectl apply -f immich.yml
