@@ -3,6 +3,10 @@ After running the ansible playbook run-deployments, you will have to add the cer
 kubectl --kubeconfig ./k3s/k3s_config -n cert-manager get secret root-secret \
   -o jsonpath='{.data.tls\.crt}' | base64 -D > ./root-ca.crt
 
+>[!note]
+> For later documentation/IaC, to use longhorn, in each vm, add harddisk from lvm, format as ext4 and mount at a dedicated path, add mount to etc/fstab using uuid
+> Will need this when using ansible on proxmox nodes or via terraform
+
 344 Project
 
 Networking Services | K3s

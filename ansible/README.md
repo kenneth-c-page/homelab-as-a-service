@@ -24,4 +24,10 @@ If you're running a distro that doesn't come with sudo installed (which Ansible 
 
 Some connections will fail arbitrarily, just try running commands again as needed
 
+To add Longhorn block storage, run init-longhorn.yml after k3s-clustering.yml:
+
+ansible-playbook playbooks/init-longhorn.yml --ask-vault-pass
+
+It checks the cluster's Kubernetes version against the Longhorn release pinned in playbooks/vars/longhorn.yml, installs the node prerequisites (open-iscsi with iscsid running, nfs-common, cryptsetup, dmsetup), installs Longhorn, and makes `longhorn` the default StorageClass. Before bumping `longhorn_version`, check the new release's Kubernetes requirement and update `longhorn_min_kubernetes_version` to match.
+
 After running the k3s/run-deployments playbook, to see what nodes are running, run kubectl --kubeconfig /path/to/k3s_config get nodes
