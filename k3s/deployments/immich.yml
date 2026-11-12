@@ -24,7 +24,7 @@ spec:
     - nfsvers=4.1
   nfs:
     server: 192.168.1.158
-    path: /srv/nfs/immich-data
+    path: /srv/nfs/asus_nfs_2tb
 --- # Pesistent Volume Claim for Immich
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -57,7 +57,7 @@ spec:
     - nfsvers=4.1
   nfs:
     server: 192.168.1.158
-    path: /srv/nfs/immich-postgres
+    path: /srv/nfs/asus_nfs_128gb
 --- # PVC for PostgreSQL database data
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -202,7 +202,6 @@ spec:
                 name: immich-traefik-ingress
                 port:
                   number: 2283
-[cite: 1]
 
 ### Still to do 
 ### Create both NFS export directories on the storage server (`192.168.1.158`): `/srv/nfs/immich-data` and `/srv/nfs/immich-postgres`.
