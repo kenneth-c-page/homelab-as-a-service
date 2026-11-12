@@ -1,0 +1,32 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: vw-data-migration
+  namespace: 344-group-project
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: copy
+        image: debian:bookworm-slim
+        command: ["/bin/sh", "-ec"]
+        args:
+          - tar -C /source -cpf - . | tar -C /target -xpf -
+        securityContext:
+          runAsUser: 0
+        volumeMounts:
+          - name: source
+            mountPath: /source
+            readOnly: true
+          - name: target
+            mountPath: /target
+      volumes:
+      - name: source
+        persistentVolumeClaim:
+          claimName: vw-data-pvc
+          readOnly: true
+      - name: target
+        persistentVolumeClaim:
+          claimName: vw-data-longhorn-pvc
