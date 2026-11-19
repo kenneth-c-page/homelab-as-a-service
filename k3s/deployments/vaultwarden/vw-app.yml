@@ -1,33 +1,3 @@
---- # Longhorn configuration for redundant disks; if using this as a reference, DO NOT USE vw-data and vw-storage.
-# Instead, look at sequence.md for steps and resources on how to do this
-kind: StorageClass
-apiVersion: storage.k8s.io/v1
-metadata:
-  name: vw-longhorn
-provisioner: driver.longhorn.io
-allowVolumeExpansion: true
-reclaimPolicy: Retain
-volumeBindingMode: Immediate
-parameters:
-  numberOfReplicas: "3"
-  fsType: "ext4"
-  diskSelector: "vw-data"
-  nodeSelector: "vw-storage"
-  replicaSoftAntiAffinity: "disabled"
---- # PVC using the Longhorn StorageClass
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: vw-data-longhorn-pvc
-  namespace: 344-group-project
-spec:
-  accessModes:
-    - ReadWriteOncePod
-  volumeMode: Filesystem
-  storageClassName: vw-longhorn
-  resources:
-    requests:
-      storage: 10Gi
 --- # VaultWarden app config
 # The vw-secret Secret (ADMIN_TOKEN, SIGNUPS_ALLOWED, DOMAIN) is created by
 # ansible/playbooks/run-deployments.yml from the Ansible vault, so the token
@@ -53,7 +23,8 @@ spec:
     spec:
       containers:
         - name: vw-pod
-          image: vaultwarden/server@sha256:4fe17f415f90087377d37c755e0ea3cf189dcc6794e49cdd2a9adbb4937d9e1f
+          image: vaultwarden/server:latest
+          imagePullPolicy: Always
           ports:
           - containerPort: 80
             name: http

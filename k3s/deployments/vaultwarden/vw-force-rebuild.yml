@@ -1,0 +1,43 @@
+---
+apiVersion: apiserver.config.k8s.io/v1
+kind: AuthorizationConfiguration
+authorizers:
+  - type: RBAC
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vw-restart-sa
+  namespace: 344-group-project
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: 344-group-project
+  name: vw-restart-role
+rules:
+- apiGroups: 
+  - apps
+  resources: 
+  - deployments
+  verbs:
+  - get
+  - patch
+  - watch
+  resourceNames: "vw-app"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: vw-restart-rb
+  namespace: 344-group-project
+subjects:
+# You can specify more than one "subject"
+- kind: ServiceAccount
+  name: vw-restart-sa
+  namespace: 344-group-project
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: vw-restart-role
+  apiGroup: rbac.authorization.k8s.io
