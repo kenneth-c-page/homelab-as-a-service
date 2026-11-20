@@ -1,43 +1,56 @@
----
-apiVersion: apiserver.config.k8s.io/v1
-kind: AuthorizationConfiguration
-authorizers:
-  - type: RBAC
----
-apiVersion: v1
-kind: ServiceAccount
+--- # CHANGING THIS JOB WILL CREATE A NEW CRONJOB
+apiVersion: batch/v1
+kind: CronJob
 metadata:
-  name: vw-restart-sa
+  name: vw-restart-job
   namespace: 344-group-project
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  namespace: 344-group-project
-  name: vw-restart-role
-rules:
-- apiGroups: 
-  - apps
-  resources: 
-  - deployments
-  verbs:
-  - get
-  - patch
-  - watch
-  resourceNames: "vw-app"
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: vw-restart-rb
-  namespace: 344-group-project
-subjects:
-# You can specify more than one "subject"
-- kind: ServiceAccount
-  name: vw-restart-sa
-  namespace: 344-group-project
-  apiGroup: rbac.authorization.k8s.io
-roleRef:
-  kind: Role
-  name: vw-restart-role
-  apiGroup: rbac.authorization.k8s.io
+spec:
+  schedule: "0 6 * * 6"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      ttlSecondsAfterFinished: 7200
+      template:
+        spec:
+          hostNetwork: false
+          hostPID: false
+          hostIPC: false
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 3000
+            runAsNonRoot: true
+          containers:
+          - name: vw-restart-pod
+            image: bitnami/kubectl:latest@sha256:8919c149c2e3d6860e0143c117900e64d71395172aaef0e01e604bb98c8e7ce0
+            imagePullPolicy: IfNotPresent
+            command: ["/bin/sh", "-c"]
+            args:
+              - |
+                kubectl --cache-dir=/tmp/kubectl-cache rollout restart deployment/vw-app -n 344-group-project && 
+                kubectl --cache-dir=/tmp/kubectl-cache rollout status deployment/vw-app -n 344-group-project --timeout=300s
+            securityContext:
+              runAsUser: 2000
+              capabilities:
+                drop: ["ALL"]
+              allowPrivilegeEscalation: false
+              privileged: false
+              readOnlyRootFilesystem: true
+              seccompProfile:
+                type: RuntimeDefault
+            resources:
+              requests:
+                memory: "128Mi"
+                cpu: "50m"
+              limits:
+                memory: "256Mi"
+                cpu: "100m"
+            volumeMounts:
+            - name: kubectl-cache
+              mountPath: "/tmp/kubectl-cache"
+          volumes:
+          - name: kubectl-cache
+            emptyDir:
+              sizeLimit: 16Mi
+          restartPolicy: Never
+          serviceAccountName: vw-restart-sa

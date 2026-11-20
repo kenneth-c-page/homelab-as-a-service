@@ -21,6 +21,7 @@ spec:
       labels:
         app: vw-app
     spec:
+      automountServiceAccountToken: false
       containers:
         - name: vw-pod
           image: vaultwarden/server:latest
