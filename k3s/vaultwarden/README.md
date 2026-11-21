@@ -1,11 +1,11 @@
 # Future Steps
 1. Backups: 
->[!info] Create:
+Create:
 ```
 pod=$(344kctl -n 344-group-project get pods -l app=vw-app -o jsonpath='{.items[0].metadata.name}') && \
 344kctl $pod:/data vw-bak
 ```
->[!info] Restore
+Restore
 ```
 tar -C ./vw-bak -cpf - . | 344kctl exec -i deploy/vw-app -- tar -xpf - -C /data
 ```
