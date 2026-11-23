@@ -1,0 +1,273 @@
+--- # database setup/credentials
+apiVersion: v1
+kind: Secret
+metadata:
+  name: immich-secret
+  namespace: 344-group-project
+type: Opaque
+stringData:
+  DB_PASSWORD: "kubernetes"
+--- # immich upload perms Persistent Colume stoorage
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: immich-data-pv
+spec:
+  capacity:
+    storage: 50Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  mountOptions:
+    - nfsvers=4.1
+  nfs:
+    server: 192.168.1.158
+    path: /srv/nfs/asus_nfs_2tb
+--- # Pesistent Volume Claim for Immich
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: immich-data-pvc
+  namespace: 344-group-project
+spec:
+  accessModes:
+    - ReadWriteMany
+  volumeMode: Filesystem
+  volumeName: immich-data-pv
+  resources:
+    requests:
+      storage: 50Gi
+  storageClassName: ""
+--- # PV for PostgreSQL database data
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: immich-pg-pv
+spec:
+  capacity:
+    storage: 10Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  mountOptions:
+    - nfsvers=4.1
+  nfs:
+    server: 192.168.1.158
+    path: /srv/nfs/asus_nfs_128gb
+--- # PVC for PostgreSQL database data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: immich-pg-pvc
+  namespace: 344-group-project
+spec:
+  accessModes:
+    - ReadWriteMany
+  volumeMode: Filesystem
+  volumeName: immich-pg-pv
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: ""
+--- # Redis required by Immich - added 11/18/2026
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: immich-redis
+  namespace: 344-group-project
+  labels:
+    app: immich-redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: immich-redis
+  template:
+    metadata:
+      labels:
+        app: immich-redis
+    spec:
+      containers:
+        - name: redis
+          image: docker.io/redis:6.2-alpine
+          ports:
+            - name: redis
+              containerPort: 6379
+              protocol: TCP
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: 344-group-project
+spec:
+  selector:
+    app: immich-redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: 6379
+      protocol: TCP
+--- # full deployment for immich and database in same pod
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: immich-app
+  namespace: 344-group-project
+  labels:
+    app: immich-app
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: immich-app
+  template:
+    metadata:
+      labels:
+        app: immich-app
+    spec:
+      containers:
+        - name: server
+          image: ghcr.io/immich-app/immich-server:v1.119.0
+          ports:
+            - containerPort: 2283
+              name: http
+          env:
+            - name: DB_HOSTNAME
+              value: "localhost"
+            - name: REDIS_HOSTNAME
+              value: "redis"
+            - name: DB_USERNAME
+              value: "postgres"
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: immich-secret
+                  key: DB_PASSWORD
+            - name: DB_DATABASE_NAME
+              value: "immich"
+          volumeMounts:
+            - name: nfs-data
+              mountPath: /usr/src/app/upload
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /api/server/ping
+              port: 2283
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /api/server/ping
+              port: 2283
+            initialDelaySeconds: 15
+            periodSeconds: 5
+          startupProbe:
+            httpGet:
+              path: /api/server/ping
+              port: 2283
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+        - name: database
+          image: docker.io/tensorchord/pgvecto-rs:pg14-v0.2.0@sha256:90724186f0a3517cf6914295b5ab410db9ce23190a2d9d0b9dd6463e3fa298f0
+          args:
+            - postgres
+            - -c
+            - shared_preload_libraries=vectors.so
+            - -c
+            - 'search_path="$user", public, vectors'
+          ports:
+            - containerPort: 5432
+              name: postgres
+          env:
+            - name: POSTGRES_USER
+              value: "postgres"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: immich-secret
+                  key: DB_PASSWORD
+            - name: POSTGRES_DB
+              value: "immich"
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata-fresh-20261118
+          volumeMounts:
+            - name: nfs-pg-data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+      volumes:
+        - name: nfs-data
+          persistentVolumeClaim:
+            claimName: immich-data-pvc
+        - name: nfs-pg-data
+          persistentVolumeClaim:
+            claimName: immich-pg-pvc
+--- # internal port mapping for immich
+apiVersion: v1
+kind: Service
+metadata:
+  name: immich-traefik-ingress
+  namespace: 344-group-project
+spec:
+  selector:
+    app: immich-app
+  ports:
+    - port: 2283
+      targetPort: 2283
+      protocol: TCP
+      name: http
+  type: NodePort
+--- # TLS set up for encrypted traffic
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: immich-tls-ingress
+  namespace: 344-group-project
+  annotations:
+    cert-manager.io/cluster-issuer: cm-ca
+spec:
+  tls:
+    - hosts:
+        - immich.home.arpa
+      secretName: immich-tls-secret
+  rules:
+    - host: immich.home.arpa
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: immich-traefik-ingress
+                port:
+                  number: 2283
+

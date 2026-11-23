@@ -1,31 +1,53 @@
-# k3s
+After running the ansible playbook run-deployments, you will have to add the certmanager certificate to your trusted certificates by using the following command.
 
-Apply the shared namespace first, then the deployment manifests:
+kubectl --kubeconfig ./k3s/k3s_config -n cert-manager get secret root-secret \
+  -o jsonpath='{.data.tls\.crt}' | base64 -D > ./root-ca.crt
 
-```bash
-kubectl apply -f k3s/namespace.yml
-kubectl apply -f k3s/deployments/lucas.yml
-```
+>[!note]
+> For later documentation/IaC, to use longhorn, in each vm, add harddisk from lvm, format as ext4 and mount at a dedicated path, add mount to etc/fstab using uuid
+> Will need this when using ansible on proxmox nodes or via terraform
 
-Lucas's services:
+## Lucas's services
 
-- `deployments/lucas.yml` - Authentik, Pi-hole + Unbound, and the website.
-- `lucas-secrets.md` - required Secret generation and replacement.
-- `lucas-ingress.md` - optional migration from LoadBalancer ports to Traefik
-  Ingress hostnames.
-- `../services/website/k3s-image.md` - building and importing the website image.
+- [Deployment guide](lucas/lucas-deploy.md)
+- [Secrets](lucas/lucas-secrets.md)
+- [Ingress](lucas/lucas-ingress.md)
 
-The kubeconfig is fetched by `ansible/playbooks/run-deployments.yml` to
-`k3s/k3s_config`, which is gitignored.
+344 Project
 
-## Notes
+Networking Services | K3s
+https://docs.k3s.io/networking/networking-services
 
-- Replace the placeholder Secret values before exposing anything; see
-  `lucas-secrets.md`.
-- The Pi-hole PVC starts empty. The checked-in `services/pihole/etc-pihole`
-  directory is not mounted into the cluster; copy it into the PVC after the pod
-  starts if you need the existing configuration.
-- Pi-hole DNS listens on port 53. If the nodes already run `systemd-resolved`,
-  see the DNS note in `lucas-ingress.md`.
-- The website image must be built and imported, or pushed to a registry; see
-  `../services/website/k3s-image.md`.
+Persistent Volumes | Kubernetes
+https://kubernetes.io/docs/concepts/storage/persistent-volumes/
+
+local-path-provisioner/examples/pod-with-local-volume/pod.yaml at master · rancher/local-path-provisioner
+https://github.com/rancher/local-path-provisioner/blob/master/examples/pod-with-local-volume/pod.yaml
+
+Deploy Vaultwarden on Thalassa Cloud Kubernetes – Thalassa Cloud
+https://docs.thalassa.cloud/docs/kubernetes/guides/apps/deploy-vaultwarden/
+
+dani-garcia/vaultwarden: Unofficial Bitwarden compatible server written in Rust, formerly known as bitwarden_rs
+https://github.com/dani-garcia/vaultwarden
+
+vaultwarden/.env.template at main · dani-garcia/vaultwarden
+https://github.com/dani-garcia/vaultwarden/blob/main/.env.template
+
+Service | Kubernetes
+https://kubernetes.io/docs/concepts/services-networking/service/
+
+Ingress | Kubernetes
+https://kubernetes.io/docs/concepts/services-networking/ingress/
+
+kubectl apply - cert-manager Documentation
+https://cert-manager.io/docs/installation/kubectl/
+
+Annotated Ingress resource - cert-manager Documentation
+https://cert-manager.io/docs/usage/ingress/
+
+SelfSigned - cert-manager Documentation
+https://cert-manager.io/docs/configuration/selfsigned/
+
+SelfSigned - cert-manager Documentation
+https://cert-manager.io/docs/configuration/selfsigned/#bootstrapping-ca-issuers
+

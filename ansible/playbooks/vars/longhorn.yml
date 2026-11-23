@@ -1,0 +1,12 @@
+# Shared settings for init-longhorn.yml
+
+# Longhorn release to install. Check its Kubernetes requirement before bumping:
+# https://longhorn.io/docs/<version>/deploy/install/#installation-requirements
+longhorn_version: v1.13.0
+
+# Minimum Kubernetes version the pinned Longhorn release supports (v1.13.0 needs >= 1.34)
+longhorn_min_kubernetes_version: "1.34"
+
+# Make Longhorn the cluster's default StorageClass and stop k3s's local-path from being default.
+# PVCs that set storageClassName (including "" for static NFS PVs) are unaffected.
+longhorn_default_storage_class: true

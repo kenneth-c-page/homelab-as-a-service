@@ -1,0 +1,198 @@
+# Installs Longhorn block storage on the k3s cluster.
+#
+#   1. Master node:  check the cluster's Kubernetes version is supported by the pinned Longhorn release
+#   2. k3s nodes:    install and start Longhorn's host prerequisites (open-iscsi/iscsid, NFSv4 client, etc.)
+#   3. Master node:  apply the Longhorn manifest and wait for it to come up
+#
+# Run from the ansible/ directory, after k3s-clustering.yml:
+#   ansible-playbook playbooks/init-longhorn.yml --ask-vault-pass
+#
+# Requirements: https://longhorn.io/docs/1.13.0/deploy/install/#installation-requirements
+# K3s notes:    https://longhorn.io/docs/1.13.0/advanced-resources/os-distro-specific/csi-on-k3s/
+#
+# Longhorn stores replica data in /var/lib/longhorn on each node, so that path needs free disk space.
+
+- name: Check the cluster supports this Longhorn release
+  hosts: master_node
+  become: yes
+  vars_files:
+    - vars/longhorn.yml
+  tasks:
+    - name: Get Kubernetes server version
+      command: kubectl version -o json
+      register: kube_version
+      changed_when: false
+
+    - name: Check Kubernetes version
+      vars:
+        server_version: >-
+          {{ (kube_version.stdout | from_json).serverVersion.gitVersion
+             | regex_replace('^v', '') | regex_replace('[+-].*$', '') }}
+      assert:
+        that: server_version is version(longhorn_min_kubernetes_version, '>=')
+        fail_msg: >-
+          Kubernetes {{ server_version }} is older than {{ longhorn_min_kubernetes_version }}, which
+          Longhorn {{ longhorn_version }} requires. Upgrade k3s or pin an older Longhorn release in vars/longhorn.yml.
+        success_msg: Kubernetes {{ server_version }} is supported by Longhorn {{ longhorn_version }}
+
+- name: Install Longhorn prerequisites on k3s nodes
+  hosts: master_node:workers
+  become: yes
+  tasks:
+    - name: Install Longhorn host packages
+      apt:
+        name:
+          - open-iscsi    # iscsiadm/iscsid, used to attach v1 block volumes
+          - nfs-common    # NFSv4 client, for RWX volumes and NFS backups
+          - cryptsetup    # LUKS volume encryption
+          - dmsetup       # device mapper
+          - bash
+          - curl
+          - util-linux    # findmnt, blkid, lsblk
+          - grep
+          - gawk
+        state: present
+        update_cache: yes
+
+    - name: Gather installed package versions
+      package_facts:
+        manager: apt
+
+    # open-iscsi 2.1.12 has a config change that breaks Longhorn volume attachment
+    # (https://github.com/longhorn/longhorn/issues/13733). Debian 13 ships 2.1.11.
+    - name: Check open-iscsi is not version 2.1.12
+      assert:
+        that: not (ansible_facts.packages['open-iscsi'][0].version is match('2\.1\.12'))
+        fail_msg: >-
+          open-iscsi {{ ansible_facts.packages['open-iscsi'][0].version }} breaks Longhorn.
+          Install a version <= 2.1.11 or >= 2.1.13.
+        quiet: true
+
+    - name: Load kernel modules for iSCSI and encryption at boot
+      copy:
+        dest: /etc/modules-load.d/longhorn.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by Ansible (init-longhorn.yml)
+          iscsi_tcp
+          dm_crypt
+
+    # iscsi_tcp must be loaded before iscsid starts
+    - name: Load kernel modules now
+      community.general.modprobe:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - iscsi_tcp
+        - dm_crypt
+
+    - name: Enable and start iscsid
+      service:
+        name: iscsid
+        state: started
+        enabled: yes
+
+    - name: Gather service facts
+      service_facts:
+
+    # multipathd grabs Longhorn's iSCSI devices and makes volumes fail to mount.
+    # Debian doesn't install it by default; this only applies if it's present.
+    # https://longhorn.io/kb/troubleshooting-volume-with-multipath/
+    - name: Keep multipathd away from Longhorn devices
+      when: "'multipathd.service' in ansible_facts.services"
+      block:
+        - name: Create multipath config directory
+          file:
+            path: /etc/multipath/conf.d
+            state: directory
+            mode: "0755"
+
+        - name: Blacklist sd devices in multipath
+          copy:
+            dest: /etc/multipath/conf.d/longhorn.conf
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              # Managed by Ansible (init-longhorn.yml)
+              blacklist {
+                  devnode "^sd[a-z0-9]+"
+              }
+          notify: Restart multipathd
+
+  handlers:
+    - name: Restart multipathd
+      service:
+        name: multipathd
+        state: restarted
+
+- name: Install Longhorn
+  hosts: master_node
+  become: yes
+  vars_files:
+    - vars/longhorn.yml
+  tasks:
+    - name: Apply Longhorn manifest
+      command: kubectl apply -f https://raw.githubusercontent.com/longhorn/longhorn/{{ longhorn_version }}/deploy/longhorn.yaml
+      register: longhorn_apply
+      changed_when: longhorn_apply.stdout_lines | reject('search', ' unchanged$') | list | length > 0
+
+    - name: Wait for longhorn-manager on every node
+      command: kubectl -n longhorn-system rollout status daemonset/longhorn-manager --timeout=600s
+      changed_when: false
+
+    - name: Wait for the driver deployer
+      command: kubectl -n longhorn-system rollout status deployment/longhorn-driver-deployer --timeout=300s
+      changed_when: false
+
+    # The driver deployer creates the CSI plugin once longhorn-manager is up
+    - name: Wait for the CSI plugin to be created
+      command: kubectl -n longhorn-system get daemonset longhorn-csi-plugin
+      register: csi_plugin
+      until: csi_plugin.rc == 0
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Wait for the CSI plugin on every node
+      command: kubectl -n longhorn-system rollout status daemonset/longhorn-csi-plugin --timeout=600s
+      changed_when: false
+
+    - name: Make Longhorn the only default StorageClass
+      when: longhorn_default_storage_class
+      block:
+        # k3s re-applies its bundled manifests on restart, which would re-mark local-path
+        # as default. A .skip file stops that; the existing local-path resources are kept.
+        - name: Stop k3s from re-applying the local-path manifest
+          file:
+            path: /var/lib/rancher/k3s/server/manifests/local-storage.yaml.skip
+            state: touch
+            modification_time: preserve
+            access_time: preserve
+
+        - name: Unset local-path as the default StorageClass
+          command: >-
+            kubectl patch storageclass local-path -p
+            '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}'
+          register: local_path_patch
+          changed_when: "'no change' not in local_path_patch.stdout"
+
+    - name: Get StorageClasses
+      command: kubectl get storageclass
+      register: storage_classes
+      changed_when: false
+
+    - name: Show StorageClasses
+      debug:
+        msg: "{{ storage_classes.stdout_lines }}"
+
+    - name: Get Longhorn nodes
+      command: kubectl -n longhorn-system get nodes.longhorn.io
+      register: longhorn_nodes
+      changed_when: false
+
+    - name: Show Longhorn nodes
+      debug:
+        msg: "{{ longhorn_nodes.stdout_lines }}"

@@ -1,0 +1,4 @@
+# Proxmox node logs in as root over SSH with its own password,
+# stored in the separate "proxmox" vault (vault.yml in this directory)
+ansible_connection: ssh
+ansible_password: "{{ vault_proxmox_root_password }}"

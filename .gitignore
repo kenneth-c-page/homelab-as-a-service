@@ -1,1 +1,4 @@
 k3s/k3s_config
+**/vw-bak
+k3s/secrets.local.yml
+k3s/lucas/secrets.local.yml

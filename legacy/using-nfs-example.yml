@@ -1,0 +1,145 @@
+--- # PV to allocate space on the advertised drives
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: vw-data-pv
+spec:
+  capacity:
+    storage: 10Gi
+  volumeMode: Filesystem
+  accessModes: 
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  mountOptions:
+    - nfsvers=4.1
+  nfs:
+    server: 192.168.1.158
+    path: /srv/nfs/asus_nfs_128gb # Look at the mountpoint you need in storage.yml in ansible directory
+--- # PV claim to reference in the vaultwarden pod
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vw-data-pvc
+  namespace: 344-group-project
+spec:
+  accessModes: 
+    - ReadWriteMany
+  volumeMode: Filesystem
+  volumeName: vw-data-pv # per line 5, the name of the PV
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: ""
+--- # VaultWarden app config
+# The vw-secret Secret (ADMIN_TOKEN, SIGNUPS_ALLOWED, DOMAIN) is created by
+# ansible/playbooks/run-deployments.yml from the Ansible vault, so the token
+# never lives in this repo in plaintext.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vw-app
+  namespace: 344-group-project
+  labels:
+    app: vw-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vw-app
+  template:
+    metadata:
+      labels:
+        app: vw-app
+    spec:
+      containers:
+        - name: vw-pod
+          image: vaultwarden/server:latest
+          ports:
+          - containerPort: 80
+            name: http
+          env:
+          - name: ADMIN_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: vw-secret
+                key: ADMIN_TOKEN
+          - name: SIGNUPS_ALLOWED
+            valueFrom:
+              secretKeyRef:
+                name: vw-secret
+                key: SIGNUPS_ALLOWED
+          - name: DOMAIN
+            valueFrom:
+              secretKeyRef:
+                name: vw-secret
+                key: DOMAIN
+          - name: ROCKET_PORT
+            value: "80"
+          - name: DATA_FOLDER
+            value: "/data"
+          volumeMounts:
+          - name: data
+            mountPath: /data
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /alive
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 5
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: vw-data-pvc
+--- # Ingress to advertise the vaultwarden service via traefik under the ClusterIP
+apiVersion: v1
+kind: Service
+metadata:
+  name: vw-traefik-ingress
+  namespace: 344-group-project
+spec:
+  selector:
+    app: vw-app
+  ports:
+    - port: 8000
+      targetPort: 80
+      protocol: TCP
+      name: http
+  type: ClusterIP
+--- # Ingress that routes to the traefik ingress service
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vw-tls-ingress
+  namespace: 344-group-project
+  annotations:
+    cert-manager.io/cluster-issuer: cm-ca
+spec:
+  tls:
+  - hosts:
+      - vaultwarden.home.arpa
+    secretName: vw-tls-secret
+  rules:
+  - host: vaultwarden.home.arpa
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: vw-traefik-ingress 
+            port:
+              number: 8000
