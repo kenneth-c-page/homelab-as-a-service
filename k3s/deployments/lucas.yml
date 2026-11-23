@@ -1,32 +1,21 @@
 # homelab-as-a-service - Lucas's services
 #
+# The "homelab-secrets" Secret is intentionally not part of this tracked
+# manifest. Create it separately from k3s/secrets.example.yml before applying
+# this file. See k3s/lucas-secrets.md.
+#
 # Apply the shared namespace first, then this manifest:
 #   kubectl apply -f k3s/namespace.yml
 #   kubectl apply -f k3s/deployments/lucas.yml
 #
 # Before applying:
-#   - Replace the placeholder values in the "homelab-secrets" Secret.
-#     See k3s/lucas-secrets.md.
-#   - Build and import the website image, or push it to a registry.
-#     See services/website/k3s-image.md.
+#   - Create the "homelab-secrets" Secret. See k3s/lucas-secrets.md.
+#   - Publish the website image to GHCR. See services/website/k3s-image.md.
+#   - If upgrading from the old single-pod authentik Deployment, follow the
+#     one-time migration in k3s/lucas-deploy.md.
 #
 # Optional: switch the HTTP endpoints from LoadBalancer ports to Traefik
 # Ingress hostnames. See k3s/lucas-ingress.md.
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: homelab-secrets
-  namespace: 344-group-project
-  labels:
-    app.kubernetes.io/part-of: homelab-as-a-service
-type: Opaque
-stringData:
-  # Replace these before using this manifest for anything real.
-  # Generate values with the commands in k3s/lucas-secrets.md.
-  PG_PASS: "CHANGE_ME_postgres_password"
-  AUTHENTIK_SECRET_KEY: "CHANGE_ME_authentik_secret_key_at_least_50_characters_long_0000000000"
-  PIHOLE_PASSWORD: "CHANGE_ME_pihole_admin_password"
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -50,8 +39,15 @@ metadata:
   labels:
     app: authentik
 spec:
+  # The server and worker now run in separate pods. Longhorn's RWX mode lets
+  # both mount the same /data volume.
+  #
+  # accessModes is immutable: if this PVC already exists as ReadWriteOnce,
+  # delete and recreate it before applying this manifest. See
+  # k3s/lucas-deploy.md.
   accessModes:
-    - ReadWriteOnce
+    - ReadWriteMany
+  storageClassName: longhorn
   resources:
     requests:
       storage: 5Gi
@@ -165,34 +161,50 @@ spec:
       targetPort: postgres
       protocol: TCP
 ---
+# The old single-pod "authentik" Deployment is replaced by the server and
+# worker Deployments below. Delete the old Deployment once before applying this
+# manifest:
+#   kubectl -n 344-group-project delete deployment authentik
+# See k3s/lucas-deploy.md for the PVC migration steps.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: authentik
+  name: authentik-server
   namespace: 344-group-project
   labels:
     app: authentik
+    component: server
 spec:
-  # Keep this at 1 with k3s's local-path storage. For HA, split the server and
-  # worker into separate Deployments and use an RWX storage class
-  # (for example Longhorn or NFS).
   replicas: 1
-  # The server and worker share one ReadWriteOnce volume, so they run in the
-  # same pod. This also keeps them on the same node with local-path storage.
+  # Recreate avoids two server pods briefly racing for the RWX volume and
+  # running migrations at the same time.
   strategy:
     type: Recreate
   selector:
     matchLabels:
       app: authentik
+      component: server
   template:
     metadata:
       labels:
         app: authentik
+        component: server
     spec:
-      # The authentik image runs as UID/GID 1000. fsGroup lets both containers
-      # write to the shared local-path volume.
+      # The authentik image runs as UID/GID 1000. fsGroup lets it write to the
+      # RWX /data volume.
       securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
         fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+      # Keep the heavier authentik pods off the 2 GB control-plane node.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: DoesNotExist
       initContainers:
         - name: wait-for-postgres
           image: docker.io/library/postgres:16-alpine
@@ -228,10 +240,12 @@ spec:
                 secretKeyRef:
                   name: homelab-secrets
                   key: AUTHENTIK_SECRET_KEY
-            # Set to "false" if you do not want Authentik to send error
-            # reports to sentry.io.
             - name: AUTHENTIK_ERROR_REPORTING__ENABLED
               value: "true"
+            # Keep debug logging for the first boot; switch to "info" once the
+            # server is stable.
+            - name: AUTHENTIK_LOG_LEVEL
+              value: "debug"
           ports:
             - name: http
               containerPort: 9000
@@ -246,7 +260,8 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 3
-            failureThreshold: 60
+            # First-boot migrations can be slow on a 2-CPU node.
+            failureThreshold: 90
           livenessProbe:
             httpGet:
               path: /-/health/live/
@@ -263,6 +278,13 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
           volumeMounts:
             - name: authentik-data
               mountPath: /data
@@ -270,14 +292,84 @@ spec:
               mountPath: /templates
             - name: shm
               mountPath: /dev/shm
-        # The Compose file runs the worker as root and mounts the Docker
-        # socket so it can manage Docker Outposts. In Kubernetes, Outposts are
-        # deployed separately, so the socket mount and root user are omitted.
+      volumes:
+        - name: authentik-data
+          persistentVolumeClaim:
+            claimName: authentik-data
+        # Empty by default. Replace with a ConfigMap or PVC if you add
+        # custom Authentik templates.
+        - name: templates
+          emptyDir: {}
+        # Equivalent of Compose's shm_size: 512mb for this pod.
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 512Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: authentik-worker
+  namespace: 344-group-project
+  labels:
+    app: authentik
+    component: worker
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: authentik
+      component: worker
+  template:
+    metadata:
+      labels:
+        app: authentik
+        component: worker
+    spec:
+      # Keep the same UID/GID and volume permissions as the server.
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: DoesNotExist
+      initContainers:
+        - name: wait-for-postgres
+          image: docker.io/library/postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - >-
+              until pg_isready -h authentik-postgresql -p 5432 -U authentik -d authentik;
+              do echo "waiting for postgres"; sleep 2; done
+        # The worker also runs migrations in its Python process. Wait for the
+        # server to finish its migrations before starting the worker.
+        - name: wait-for-server
+          image: docker.io/library/busybox:1.37
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - >-
+              until wget -qO- http://authentik-server:9000/-/health/ready/ >/dev/null 2>&1;
+              do echo "waiting for authentik server"; sleep 5; done
+      containers:
         - name: worker
           image: ghcr.io/goauthentik/server:2026.8.5
           imagePullPolicy: IfNotPresent
           args:
             - worker
+          # The worker listens on 9000/9300 inside its own pod for health and
+          # metrics. It has no Service and is not exposed.
           env:
             - name: AUTHENTIK_POSTGRESQL__HOST
               value: authentik-postgresql
@@ -297,15 +389,18 @@ spec:
                   key: AUTHENTIK_SECRET_KEY
             - name: AUTHENTIK_ERROR_REPORTING__ENABLED
               value: "true"
+            - name: AUTHENTIK_LOG_LEVEL
+              value: "debug"
           startupProbe:
             exec:
               command:
                 - ak
                 - healthcheck
-            initialDelaySeconds: 30
+            initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 5
-            failureThreshold: 60
+            # Allow a long first boot; the server's readiness gate runs first.
+            failureThreshold: 90
           livenessProbe:
             exec:
               command:
@@ -324,6 +419,13 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 2Gi
           volumeMounts:
             - name: authentik-data
               mountPath: /data
@@ -335,11 +437,8 @@ spec:
         - name: authentik-data
           persistentVolumeClaim:
             claimName: authentik-data
-        # Empty by default. Replace with a ConfigMap or PVC if you add
-        # custom Authentik templates.
         - name: templates
           emptyDir: {}
-        # Equivalent of Compose's shm_size: 512mb.
         - name: shm
           emptyDir:
             medium: Memory
@@ -352,10 +451,12 @@ metadata:
   namespace: 344-group-project
   labels:
     app: authentik
+    component: server
 spec:
   type: LoadBalancer
   selector:
     app: authentik
+    component: server
   ports:
     - name: http
       port: 9000
@@ -564,10 +665,10 @@ spec:
     spec:
       containers:
         - name: website
-          # Built from services/website/Dockerfile. See
-          # services/website/k3s-image.md for importing it into k3s.
-          image: astrowind:latest
-          imagePullPolicy: IfNotPresent
+          # Published by .github/workflows/website-image.yml. See
+          # services/website/k3s-image.md.
+          image: ghcr.io/kenneth-c-page/homelab-website:latest
+          imagePullPolicy: Always
           ports:
             - name: http
               containerPort: 8080
@@ -584,6 +685,13 @@ spec:
               port: http
             initialDelaySeconds: 30
             periodSeconds: 30
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
 ---
 apiVersion: v1
 kind: Service

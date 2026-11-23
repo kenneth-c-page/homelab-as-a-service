@@ -7,6 +7,12 @@ kubectl --kubeconfig ./k3s/k3s_config -n cert-manager get secret root-secret \
 > For later documentation/IaC, to use longhorn, in each vm, add harddisk from lvm, format as ext4 and mount at a dedicated path, add mount to etc/fstab using uuid
 > Will need this when using ansible on proxmox nodes or via terraform
 
+## Lucas's services
+
+- [Deployment guide](lucas-deploy.md)
+- [Secrets](lucas-secrets.md)
+- [Ingress](lucas-ingress.md)
+
 344 Project
 
 Networking Services | K3s

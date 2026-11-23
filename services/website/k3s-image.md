@@ -1,91 +1,119 @@
-# Building and importing the website image for k3s
+# Building and publishing the website image for k3s
 
 `services/website/compose.yml` uses `build: .`. Kubernetes cannot run Compose
-builds, so the image has to be built first and then either pushed to a registry
-or imported into the k3s containerd image store.
+builds, so the image is built ahead of time and published to a registry.
 
-The k3s manifest expects an image named `astrowind:latest` with
-`imagePullPolicy: IfNotPresent`. All of the build inputs stay in this
-directory: `Dockerfile`, `nginx/nginx.conf`, the Astro source, and
-`build-and-import.sh`.
+The manifest expects:
 
-## Build
-
-From the repository root:
-
-```bash
-docker compose -f services/website/compose.yml build
-# or
-docker build -t astrowind:latest services/website
+```yaml
+image: ghcr.io/kenneth-c-page/homelab-website:latest
+imagePullPolicy: Always
 ```
 
-The `image: astrowind:latest` line in `compose.yml` makes Compose tag the built
-image with the name the manifest expects.
+The `.github/workflows/website-image.yml` workflow builds
+`services/website/Dockerfile` on every push to `main` that changes the website,
+then pushes `:latest` and a SHA tag to GHCR.
 
-## Option A: import into k3s containerd (no registry)
+## Publish from GitHub Actions
 
-Run the helper from WSL/Linux:
+1. Push the workflow and website changes to `main`.
+2. Open the repository's **Actions** tab and wait for **Build website image**.
+3. In the repository/package settings, set the `homelab-website` package
+   visibility to **Public** so the cluster can pull it without a secret.
+
+If you keep the package private, create a pull secret in the cluster and add it
+to the `website` Deployment:
+
+```bash
+kubectl -n 344-group-project create secret docker-registry ghcr-pull \
+  --docker-server=ghcr.io \
+  --docker-username='<github-user>' \
+  --docker-password='<PAT with read:packages>'
+```
+
+Then add:
+
+```yaml
+imagePullSecrets:
+  - name: ghcr-pull
+```
+
+under `spec.template.spec` in the `website` Deployment.
+
+## Publish manually
+
+From a machine with Docker:
+
+```bash
+docker build -t ghcr.io/kenneth-c-page/homelab-website:latest services/website
+
+echo "$GHCR_TOKEN" | docker login ghcr.io -u '<github-user>' --password-stdin
+docker push ghcr.io/kenneth-c-page/homelab-website:latest
+```
+
+Use a personal access token with `write:packages` for the push. The workflow
+uses `GITHUB_TOKEN` instead.
+
+## Local import fallback (no registry)
+
+The manifest now uses GHCR, so the local-import path requires changing the
+image back to `astrowind:latest` with `imagePullPolicy: IfNotPresent`. The
+image must be present on every node the pod can schedule to; the Deployment has
+no `nodeSelector`.
+
+Build and save:
+
+```bash
+docker build -t astrowind:latest services/website
+docker save astrowind:latest -o /tmp/astrowind-image.tar
+```
+
+Or use the helper:
 
 ```bash
 services/website/build-and-import.sh
 ```
 
-It builds `astrowind:latest`, saves it to `/tmp/astrowind-image.tar`, and imports
-it into the local k3s containerd if `k3s` is installed on the same machine.
-
-If you build on a different machine from the cluster, copy the tarball to every
-node and import it there:
+It imports into the local k3s containerd when run on a cluster node. From a
+different machine, copy the tarball to each node and import it:
 
 ```bash
-scp /tmp/astrowind-image.tar master:/tmp/
-ssh master 'sudo k3s ctr -n k8s.io images import /tmp/astrowind-image.tar'
-
-# Repeat on worker1, worker2, and worker3, or use a loop:
-for host in worker1 worker2 worker3; do
+for host in master worker-1 worker-2 worker-3; do
   scp /tmp/astrowind-image.tar "$host:/tmp/"
   ssh "$host" 'sudo k3s ctr -n k8s.io images import /tmp/astrowind-image.tar'
 done
 ```
 
-The Deployment has no `nodeSelector`, so it can schedule on any node; the image
-must be present on every node it might use.
-
-Verify the import:
+Verify on each node:
 
 ```bash
 sudo k3s ctr -n k8s.io images ls | grep astrowind
 ```
 
-## Option B: push to a registry
+Then set the manifest to:
 
-```bash
-docker tag astrowind:latest ghcr.io/<owner>/homelab-website:latest
-docker push ghcr.io/<owner>/homelab-website:latest
+```yaml
+image: astrowind:latest
+imagePullPolicy: IfNotPresent
 ```
-
-Then change the `image:` in `k3s/deployments/lucas.yml` to the registry
-reference. If the registry is private, add an `imagePullSecret` to the
-`website` Deployment.
 
 ## Updating the site
 
-After rebuilding and re-importing (or pushing), restart the Deployment so it
-picks up the new image:
+After the workflow pushes a new `:latest`, restart the Deployment so the pod
+pulls it:
 
 ```bash
 kubectl rollout restart deployment/website -n 344-group-project
 ```
 
-If you use a registry and keep the `latest` tag, the manifest's
-`imagePullPolicy: IfNotPresent` can reuse a cached copy on the node. Either set
-`imagePullPolicy: Always` for that Deployment or push a unique tag/digest and
-update the manifest.
+Because the manifest uses `imagePullPolicy: Always`, a pod restart always checks
+GHCR for the current `:latest` image.
 
 ## Notes
 
-- Do not commit the `.tar` image; it is a build artifact. It is ignored by
-  `services/website/.gitignore` if you choose to keep it here.
-- If you prefer to keep the tarball in this directory, run:
-  `TARBALL=./astrowind-image.tar services/website/build-and-import.sh`
+- The image is prebuilt nginx serving Astro's `dist` output. `npm` and the
+  Astro build run only at image build time, not when the pod starts.
+- Do not commit image tarballs. `services/website/.gitignore` ignores them if
+  you keep them in that directory.
 - The first build can take a few minutes because the Astro site is built with
   Node before the final nginx image is produced.

@@ -1,0 +1,47 @@
+name: Build website image
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "services/website/**"
+      - ".github/workflows/website-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: website-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: services/website
+          file: services/website/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/kenneth-c-page/homelab-website:latest
+            ghcr.io/kenneth-c-page/homelab-website:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
