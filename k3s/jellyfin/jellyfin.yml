@@ -1,0 +1,128 @@
+--- # Jellyfin config and media storage Persistent Volume
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: jellyfin-data-pv
+spec:
+  capacity:
+    storage: 100Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  mountOptions:
+    - nfsvers=4.1
+  nfs:
+    server: 192.168.1.158
+    path: /srv/nfs/asus_nfs_2tb
+--- # PVC 4 Jellyfin
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jellyfin-data-pvc
+  namespace: 344-group-project
+spec:
+  accessModes:
+    - ReadWriteMany
+  volumeMode: Filesystem
+  volumeName: jellyfin-data-pv
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: ""
+--- # Jellyfin Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jellyfin-app
+  namespace: 344-group-project
+  labels:
+    app: jellyfin-app
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: jellyfin-app
+  template:
+    metadata:
+      labels:
+        app: jellyfin-app
+    spec:
+      containers:
+        - name: jellyfin
+          image: jellyfin/jellyfin:latest
+          ports:
+            - containerPort: 8096
+              name: http
+            - containerPort: 8920
+              name: https
+          volumeMounts:
+            - name: nfs-data
+              mountPath: /config
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8096
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8096
+            initialDelaySeconds: 15
+            periodSeconds: 5
+      volumes:
+        - name: nfs-data
+          persistentVolumeClaim:
+            claimName: jellyfin-data-pvc
+--- # Internal port mapping for Jellyfin
+apiVersion: v1
+kind: Service
+metadata:
+  name: jellyfin-traefik-ingress
+  namespace: 344-group-project
+spec:
+  selector:
+    app: jellyfin-app
+  ports:
+    - port: 8096
+      targetPort: 8096
+      protocol: TCP
+      name: http
+  type: NodePort
+--- # TLS setup for encrypted traffic like the other nodes
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: jellyfin-tls-ingress
+  namespace: 344-group-project
+  annotations:
+    cert-manager.io/cluster-issuer: cm-ca
+spec:
+  tls:
+    - hosts:
+        - jellyfin.home.arpa
+      secretName: jellyfin-tls-secret
+  rules:
+    - host: jellyfin.home.arpa
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: jellyfin-traefik-ingress
+                port:
+                  number: 8096
+
+                  # please work!!!!! 

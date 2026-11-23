@@ -1,7 +1,7 @@
 # Secrets for Lucas's services
 
 The tracked manifest no longer contains the `homelab-secrets` Secret.
-`k3s/secrets.example.yml` is the template; create the real Secret separately so
+`k3s/lucas/secrets.example.yml` is the template; create the real Secret separately so
 applying `k3s/deployments/lucas.yml` can never overwrite it with placeholders.
 
 On the existing cluster `homelab-secrets` already exists. Leave it alone unless
@@ -31,12 +31,12 @@ Use a password manager or a password of your choice for the Pi-hole value.
 
 ### Option A: local file from the example (recommended for a fresh cluster)
 
-`k3s/secrets.local.yml` is ignored by Git.
+`k3s/lucas/secrets.local.yml` is ignored by Git.
 
 ```bash
-cp k3s/secrets.example.yml k3s/secrets.local.yml
-# edit k3s/secrets.local.yml and replace the three placeholders
-kubectl apply -f k3s/secrets.local.yml
+cp k3s/lucas/secrets.example.yml k3s/lucas/secrets.local.yml
+# edit k3s/lucas/secrets.local.yml and replace the three placeholders
+kubectl apply -f k3s/lucas/secrets.local.yml
 ```
 
 ### Option B: create it directly
@@ -55,7 +55,7 @@ kubectl apply -f /tmp/homelab-secrets.yaml -n 344-group-project
 For a GitOps workflow, use a tool such as Sealed Secrets, SOPS, or External
 Secrets instead of committing plaintext.
 
-Do not apply `k3s/secrets.example.yml` as-is. If the Secret already exists, that
+Do not apply `k3s/lucas/secrets.example.yml` as-is. If the Secret already exists, that
 would replace the real values with placeholders.
 
 ## First start vs. rotation
@@ -91,8 +91,8 @@ would replace the real values with placeholders.
 For a fresh cluster:
 
 ```bash
-kubectl apply -f k3s/namespace.yml
-kubectl apply -f k3s/secrets.local.yml
+kubectl apply -f k3s/backbone/namespace.yml
+kubectl apply -f k3s/lucas/secrets.local.yml
 kubectl apply -f k3s/deployments/lucas.yml
 ```
 

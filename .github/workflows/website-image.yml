@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - "services/website/**"
+      - "k3s/lucas/services/website/**"
       - ".github/workflows/website-image.yml"
   workflow_dispatch:
 
@@ -37,8 +37,8 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          context: services/website
-          file: services/website/Dockerfile
+          context: k3s/lucas/services/website
+          file: k3s/lucas/services/website/Dockerfile
           push: true
           tags: |
             ghcr.io/kenneth-c-page/homelab-website:latest

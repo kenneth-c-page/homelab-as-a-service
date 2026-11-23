@@ -1,6 +1,6 @@
 # Building and publishing the website image for k3s
 
-`services/website/compose.yml` uses `build: .`. Kubernetes cannot run Compose
+`k3s/lucas/services/website/compose.yml` uses `build: .`. Kubernetes cannot run Compose
 builds, so the image is built ahead of time and published to a registry.
 
 The manifest expects:
@@ -11,7 +11,7 @@ imagePullPolicy: Always
 ```
 
 The `.github/workflows/website-image.yml` workflow builds
-`services/website/Dockerfile` on every push to `main` that changes the website,
+`k3s/lucas/services/website/Dockerfile` on every push to `main` that changes the website,
 then pushes `:latest` and a SHA tag to GHCR.
 
 ## Publish from GitHub Actions
@@ -45,7 +45,7 @@ under `spec.template.spec` in the `website` Deployment.
 From a machine with Docker:
 
 ```bash
-docker build -t ghcr.io/kenneth-c-page/homelab-website:latest services/website
+docker build -t ghcr.io/kenneth-c-page/homelab-website:latest k3s/lucas/services/website
 
 echo "$GHCR_TOKEN" | docker login ghcr.io -u '<github-user>' --password-stdin
 docker push ghcr.io/kenneth-c-page/homelab-website:latest
@@ -64,14 +64,14 @@ no `nodeSelector`.
 Build and save:
 
 ```bash
-docker build -t astrowind:latest services/website
+docker build -t astrowind:latest k3s/lucas/services/website
 docker save astrowind:latest -o /tmp/astrowind-image.tar
 ```
 
 Or use the helper:
 
 ```bash
-services/website/build-and-import.sh
+k3s/lucas/services/website/build-and-import.sh
 ```
 
 It imports into the local k3s containerd when run on a cluster node. From a
@@ -113,7 +113,7 @@ GHCR for the current `:latest` image.
 
 - The image is prebuilt nginx serving Astro's `dist` output. `npm` and the
   Astro build run only at image build time, not when the pod starts.
-- Do not commit image tarballs. `services/website/.gitignore` ignores them if
+- Do not commit image tarballs. `k3s/lucas/services/website/.gitignore` ignores them if
   you keep them in that directory.
 - The first build can take a few minutes because the Astro site is built with
   Node before the final nginx image is produced.

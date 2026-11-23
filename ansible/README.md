@@ -31,3 +31,14 @@ ansible-playbook playbooks/init-longhorn.yml --ask-vault-pass
 It checks the cluster's Kubernetes version against the Longhorn release pinned in playbooks/vars/longhorn.yml, installs the node prerequisites (open-iscsi with iscsid running, nfs-common, cryptsetup, dmsetup), installs Longhorn, and makes `longhorn` the default StorageClass. Before bumping `longhorn_version`, check the new release's Kubernetes requirement and update `longhorn_min_kubernetes_version` to match.
 
 After running the k3s/run-deployments playbook, to see what nodes are running, run kubectl --kubeconfig /path/to/k3s_config get nodes
+## Longhorn worker data disks (TODO)
+
+The existing `init-longhorn.yml` installs Longhorn and its host prerequisites, but it does not prepare the extra worker disks or configure Longhorn to use them. After Terraform attaches a dedicated virtual disk to each worker (see [`terraform/README.md`](../terraform/README.md)):
+
+- [ ] On `worker1`, `worker2`, and `worker3`, identify each new disk with `lsblk -f`; verify the device and size before formatting so the OS or existing data disk is not touched.
+- [ ] Format each new disk with ext4 or XFS, mount it at `/mnt/longhorn-data`, and persist the mount by UUID in `/etc/fstab`. Automate this in Ansible so it survives rebuilds and remains repeatable.
+- [ ] Register `/mnt/longhorn-data` as a schedulable filesystem disk in each worker's Longhorn node configuration.
+- [ ] Add the `vw-storage` Longhorn node tag to each worker and the `vw-data` disk tag to each registered disk. Do not tag the master for this placement.
+- [ ] Verify all three disks are schedulable and have enough capacity for one full replica each before creating the Vaultwarden claim.
+
+The Vaultwarden-specific StorageClass, data migration, workload switch, and old NFS PVC/PV cleanup are tracked in [`k3s/deployments/kenneth/sequence.md`](../k3s/deployments/kenneth/sequence.md). Keep the old claim and PV until the Longhorn copy is verified and Vaultwarden is confirmed working; deleting storage may permanently delete its data depending on the reclaim policy.

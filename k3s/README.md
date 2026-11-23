@@ -9,9 +9,9 @@ kubectl --kubeconfig ./k3s/k3s_config -n cert-manager get secret root-secret \
 
 ## Lucas's services
 
-- [Deployment guide](lucas-deploy.md)
-- [Secrets](lucas-secrets.md)
-- [Ingress](lucas-ingress.md)
+- [Deployment guide](lucas/lucas-deploy.md)
+- [Secrets](lucas/lucas-secrets.md)
+- [Ingress](lucas/lucas-ingress.md)
 
 344 Project
 

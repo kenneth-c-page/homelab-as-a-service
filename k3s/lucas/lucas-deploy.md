@@ -7,14 +7,14 @@ pods) and the website image published to GHCR.
 
 - The `344-group-project` namespace exists:
   ```bash
-  kubectl apply -f k3s/namespace.yml
+  kubectl apply -f k3s/backbone/namespace.yml
   ```
 - The `homelab-secrets` Secret exists. For a fresh cluster, create it from
-  `k3s/secrets.example.yml`:
+  `k3s/lucas/secrets.example.yml`:
   ```bash
-  cp k3s/secrets.example.yml k3s/secrets.local.yml
-  # edit k3s/secrets.local.yml and replace the placeholders
-  kubectl apply -f k3s/secrets.local.yml
+  cp k3s/lucas/secrets.example.yml k3s/lucas/secrets.local.yml
+  # edit k3s/lucas/secrets.local.yml and replace the placeholders
+  kubectl apply -f k3s/lucas/secrets.local.yml
   ```
   On the existing cluster the Secret already exists; do **not** apply the
   example file over it. See [lucas-secrets.md](lucas-secrets.md).

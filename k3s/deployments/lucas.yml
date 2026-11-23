@@ -1,21 +1,21 @@
 # homelab-as-a-service - Lucas's services
 #
 # The "homelab-secrets" Secret is intentionally not part of this tracked
-# manifest. Create it separately from k3s/secrets.example.yml before applying
-# this file. See k3s/lucas-secrets.md.
+# manifest. Create it separately from k3s/lucas/secrets.example.yml before applying
+# this file. See k3s/lucas/lucas-secrets.md.
 #
 # Apply the shared namespace first, then this manifest:
-#   kubectl apply -f k3s/namespace.yml
+#   kubectl apply -f k3s/backbone/namespace.yml
 #   kubectl apply -f k3s/deployments/lucas.yml
 #
 # Before applying:
-#   - Create the "homelab-secrets" Secret. See k3s/lucas-secrets.md.
-#   - Publish the website image to GHCR. See services/website/k3s-image.md.
+#   - Create the "homelab-secrets" Secret. See k3s/lucas/lucas-secrets.md.
+#   - Publish the website image to GHCR. See k3s/lucas/services/website/k3s-image.md.
 #   - If upgrading from the old single-pod authentik Deployment, follow the
-#     one-time migration in k3s/lucas-deploy.md.
+#     one-time migration in k3s/lucas/lucas-deploy.md.
 #
 # Optional: switch the HTTP endpoints from LoadBalancer ports to Traefik
-# Ingress hostnames. See k3s/lucas-ingress.md.
+# Ingress hostnames. See k3s/lucas/lucas-ingress.md.
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -44,7 +44,7 @@ spec:
   #
   # accessModes is immutable: if this PVC already exists as ReadWriteOnce,
   # delete and recreate it before applying this manifest. See
-  # k3s/lucas-deploy.md.
+  # k3s/lucas/lucas-deploy.md.
   accessModes:
     - ReadWriteMany
   storageClassName: longhorn
@@ -165,7 +165,7 @@ spec:
 # worker Deployments below. Delete the old Deployment once before applying this
 # manifest:
 #   kubectl -n 344-group-project delete deployment authentik
-# See k3s/lucas-deploy.md for the PVC migration steps.
+# See k3s/lucas/lucas-deploy.md for the PVC migration steps.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -632,7 +632,7 @@ metadata:
 spec:
   # If the nodes already run a resolver on port 53 (commonly systemd-resolved
   # on 127.0.0.53:53), k3s cannot bind this LoadBalancer port. See
-  # k3s/lucas-ingress.md for the NodePort alternative.
+  # k3s/lucas/lucas-ingress.md for the NodePort alternative.
   type: LoadBalancer
   selector:
     app: pihole
@@ -666,7 +666,7 @@ spec:
       containers:
         - name: website
           # Published by .github/workflows/website-image.yml. See
-          # services/website/k3s-image.md.
+          # k3s/lucas/services/website/k3s-image.md.
           image: ghcr.io/kenneth-c-page/homelab-website:latest
           imagePullPolicy: Always
           ports:
