@@ -1,0 +1,158 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sx-app
+  namespace: 344-group-project
+  labels:
+    app: sx-app
+spec:
+  progressDeadlineSeconds: 600
+  revisionHistoryLimit: 10
+  replicas: 1
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: sx-app
+  template:
+    metadata:
+      labels:
+        app: sx-app
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 977
+        runAsUser: 977
+        runAsGroup: 977
+      containers:
+      - name: sx-pod
+        image: docker.io/searxng/searxng:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+
+        env:
+        - name: SEARXNG_BASE_URL
+          value: https://searxng.home.arpa/
+        # Create with 344kctl create secret generic sx-secret --from-literal=SEARXNG_SECRET="$(openssl rand -hex 32)"
+        - name: SEARXNG_SECRET
+          valueFrom:
+            secretKeyRef: 
+              name: sx-secret
+              key: SEARXNG_SECRET
+
+        volumeMounts:
+        - name: sx-data
+          mountPath: /etc/searxng
+        - name: sx-cache
+          mountPath: /var/cache/searxng
+        - name: tmp
+          mountPath: /tmp
+
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "1000m"
+
+        startupProbe:
+          failureThreshold: 60
+          httpGet:
+            path: /healthz
+            port: http
+            scheme: HTTP
+          periodSeconds: 10
+          timeoutSeconds: 30
+
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+            scheme: HTTP
+          initialDelaySeconds: 15
+          periodSeconds: 20
+          failureThreshold: 3
+          successThreshold: 1
+
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          failureThreshold: 3
+          successThreshold: 1
+
+        securityContext:
+          runAsNonRoot: false
+          privileged: false
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          procMount: Default
+          seccompProfile:
+            type: RuntimeDefault
+          capabilities:
+            drop:
+              - ALL
+            add:
+              - SETGID
+              - SETUID
+              - CHOWN
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: sx-data
+        persistentVolumeClaim:
+          claimName: sx-data-longhorn-pvc
+      - name: sx-cache
+        emptyDir: {}
+      - name: tmp
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sx-traefik-ingress
+  namespace: 344-group-project
+spec:
+  selector:
+    app: sx-app
+  ports:
+    - port: 8888
+      targetPort: 8080
+      protocol: TCP
+      name: http
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sx-tls-ingress
+  namespace: 344-group-project
+  annotations:
+    cert-manager.io/cluster-issuer: cm-ca
+spec:
+  tls:
+  - hosts:
+      - searxng.home.arpa
+    secretName: sx-tls-secret
+  rules:
+  - host: searxng.home.arpa
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: sx-traefik-ingress
+            port:
+              number: 8888
